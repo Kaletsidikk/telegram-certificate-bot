@@ -13,11 +13,7 @@ from telegram.ext import (
 
 TOKEN = os.environ.get("BOT_TOKEN")
 
-# CHANGE THIS TO YOUR TELEGRAM USER ID
-ADMIN_ID = 1349142732
-
-# DEADLINE (YYYY-MM-DD HH:MM)
-DEADLINE = datetime(2026, 3, 20, 23, 59)
+ADMIN_ID = 1349142732   
 
 NAME, STUDENT_ID, CERTIFICATE = range(3)
 
@@ -25,14 +21,14 @@ os.makedirs("certificates", exist_ok=True)
 
 CSV_FILE = "submissions.csv"
 
-# create csv if not exists
+# create csv file
 if not os.path.exists(CSV_FILE):
     with open(CSV_FILE, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["Name", "Student ID", "File", "Time"])
+        writer.writerow(["Name", "StudentID", "File", "Time"])
 
 
-def student_exists(student_id):
+def already_submitted(student_id):
     with open(CSV_FILE, "r") as f:
         reader = csv.reader(f)
         for row in reader:
@@ -43,12 +39,8 @@ def student_exists(student_id):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    if datetime.now() > DEADLINE:
-        await update.message.reply_text("❌ Submission deadline has passed.")
-        return ConversationHandler.END
-
     await update.message.reply_text(
-        "Welcome!\n\nEnter your FULL NAME:"
+        "Welcome!\n\nPlease enter your FULL NAME."
     )
 
     return NAME
@@ -59,7 +51,7 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["name"] = update.message.text
 
     await update.message.reply_text(
-        "Enter your STUDENT ID:"
+        "Enter your STUDENT ID."
     )
 
     return STUDENT_ID
@@ -69,7 +61,7 @@ async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     student_id = update.message.text
 
-    if student_exists(student_id):
+    if already_submitted(student_id):
         await update.message.reply_text(
             "⚠️ This Student ID has already submitted."
         )
@@ -78,24 +70,47 @@ async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["id"] = student_id
 
     await update.message.reply_text(
-        "Upload your certificate file."
+        "Upload your certificate (PDF or Image)."
     )
 
     return CERTIFICATE
 
 
-async def handle_certificate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    document = update.message.document
-    file = await document.get_file()
+async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     name = context.user_data["name"]
     student_id = context.user_data["id"]
 
-    filename = f"{student_id}_{document.file_name}"
-    filepath = f"certificates/{filename}"
+    file_path = None
+    filename = None
 
-    await file.download_to_drive(filepath)
+    # DOCUMENT (PDF etc)
+    if update.message.document:
+
+        doc = update.message.document
+        file = await doc.get_file()
+
+        filename = f"{student_id}_{doc.file_name}"
+        file_path = f"certificates/{filename}"
+
+        await file.download_to_drive(file_path)
+
+    # PHOTO
+    elif update.message.photo:
+
+        photo = update.message.photo[-1]
+        file = await photo.get_file()
+
+        filename = f"{student_id}_certificate.jpg"
+        file_path = f"certificates/{filename}"
+
+        await file.download_to_drive(file_path)
+
+    else:
+        await update.message.reply_text(
+            "Please upload a certificate file (PDF or Image)."
+        )
+        return CERTIFICATE
 
     submit_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -104,42 +119,20 @@ async def handle_certificate(update: Update, context: ContextTypes.DEFAULT_TYPE)
         writer.writerow([name, student_id, filename, submit_time])
 
     await update.message.reply_text(
-        "✅ Submission successful!"
+        "✅ Certificate submitted successfully!"
     )
 
     return ConversationHandler.END
 
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Submission cancelled.")
-    return ConversationHandler.END
-
-
-# ADMIN COMMANDS
 
 async def submissions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if update.effective_user.id != ADMIN_ID:
         return
 
-    await update.message.reply_document(document=open(CSV_FILE, "rb"))
-
-
-async def files(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if update.effective_user.id != ADMIN_ID:
-        return
-
-    files = os.listdir("certificates")
-
-    if not files:
-        await update.message.reply_text("No submissions yet.")
-        return
-
-    for f in files:
-        await update.message.reply_document(
-            document=open(f"certificates/{f}", "rb")
-        )
+    await update.message.reply_document(
+        document=open(CSV_FILE, "rb")
+    )
 
 
 def main():
@@ -151,15 +144,19 @@ def main():
         states={
             NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
             STUDENT_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_id)],
-            CERTIFICATE: [MessageHandler(filters.Document.ALL, handle_certificate)],
+            CERTIFICATE: [
+                MessageHandler(
+                    filters.Document.ALL | filters.PHOTO,
+                    handle_file
+                )
+            ],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[],
     )
 
     app.add_handler(conv)
 
     app.add_handler(CommandHandler("submissions", submissions))
-    app.add_handler(CommandHandler("files", files))
 
     print("Bot running...")
 
