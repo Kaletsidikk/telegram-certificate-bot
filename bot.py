@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 
 from telegram import Update
+from telegram.error import Conflict
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -18,9 +19,12 @@ TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 RAILWAY_PUBLIC_DOMAIN = os.getenv("RAILWAY_PUBLIC_DOMAIN")
+RAILWAY_STATIC_URL = os.getenv("RAILWAY_STATIC_URL")
 WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "telegram")
 WEBHOOK_SECRET_TOKEN = os.getenv("WEBHOOK_SECRET_TOKEN")
 PORT = int(os.getenv("PORT", "8080"))
+
+ON_RAILWAY = bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PROJECT_ID"))
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -30,10 +34,12 @@ logger = logging.getLogger(__name__)
 # Conversation states
 NAME, STUDENT_ID, CERTIFICATE = range(3)
 
-# Storage setup
+# Create folder for certificates
 os.makedirs("certificates", exist_ok=True)
+
 CSV_FILE = "submissions.csv"
 
+# Create CSV file if it doesn't exist
 if not os.path.exists(CSV_FILE):
     with open(CSV_FILE, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -42,16 +48,12 @@ if not os.path.exists(CSV_FILE):
 
 # Start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_message:
-        return ConversationHandler.END
     await update.effective_message.reply_text("Welcome!\n\nPlease enter your Full Name:")
     return NAME
 
 
 # Get name
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_message or not update.effective_message.text:
-        return NAME
     context.user_data["name"] = update.effective_message.text.strip()
     await update.effective_message.reply_text("Please enter your Student ID:")
     return STUDENT_ID
@@ -59,8 +61,6 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Get student ID
 async def get_student_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_message or not update.effective_message.text:
-        return STUDENT_ID
     context.user_data["student_id"] = update.effective_message.text.strip()
     await update.effective_message.reply_text(
         "Now send your certificate (PDF, image, or document)."
@@ -70,77 +70,77 @@ async def get_student_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Receive certificate
 async def receive_certificate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_message or not update.effective_user:
-        return CERTIFICATE
-
+    message = update.effective_message
     user = update.effective_user
     name = context.user_data.get("name")
     student_id = context.user_data.get("student_id")
 
     if not name or not student_id:
-        await update.effective_message.reply_text(
-            "Session expired. Please use /start again."
-        )
+        await message.reply_text("Session expired. Please send /start again.")
         return ConversationHandler.END
 
-    file_obj = None
+    file = None
     filename = ""
 
-    if update.effective_message.document:
-        document = update.effective_message.document
-        file_obj = await document.get_file()
-        filename = document.file_name or f"{student_id}.bin"
+    if message.document:
+        file = await message.document.get_file()
+        filename = message.document.file_name or f"{student_id}.bin"
 
-    elif update.effective_message.photo:
-        file_obj = await update.effective_message.photo[-1].get_file()
+    elif message.photo:
+        file = await message.photo[-1].get_file()
         filename = f"{student_id}.jpg"
 
     else:
-        await update.effective_message.reply_text("Please send a valid certificate file.")
+        await message.reply_text("Please send a valid certificate file.")
         return CERTIFICATE
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filepath = f"certificates/{student_id}_{timestamp}_{filename}"
 
-    await file_obj.download_to_drive(filepath)
+    await file.download_to_drive(filepath)
 
     time_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     with open(CSV_FILE, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(
-            [name, student_id, user.username or "", time_now, filepath]
-        )
+        writer.writerow([name, student_id, user.username or "", time_now, filepath])
 
-    await update.effective_message.reply_text("✅ Certificate submitted successfully!")
+    await message.reply_text("✅ Certificate submitted successfully!")
+
     return ConversationHandler.END
 
 
 # Admin command to download submissions
 async def submissions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_message or not update.effective_user:
-        return
+    message = update.effective_message
+    user = update.effective_user
 
-    if update.effective_user.id != ADMIN_ID:
-        await update.effective_message.reply_text("Unauthorized")
+    if user.id != ADMIN_ID:
+        await message.reply_text("Unauthorized")
         return
 
     with open(CSV_FILE, "rb") as submissions_file:
-        await update.effective_message.reply_document(submissions_file)
+        await message.reply_document(submissions_file)
 
 
 # Cancel command
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_message:
-        await update.effective_message.reply_text("Submission cancelled.")
+    await update.effective_message.reply_text("Submission cancelled.")
     return ConversationHandler.END
 
 
-# Global error handler
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    if isinstance(context.error, Conflict):
+        logger.warning(
+            "Telegram Conflict error (multiple polling instances). "
+            "Use webhook mode on Railway by setting WEBHOOK_URL."
+        )
+        return
+
     logger.exception("Unhandled exception while processing update", exc_info=context.error)
 
 
+# Main function
 def main():
     if not TOKEN:
         raise RuntimeError("BOT_TOKEN is not set")
@@ -170,9 +170,17 @@ def main():
     app.add_handler(CommandHandler("submissions", submissions))
     app.add_error_handler(error_handler)
 
-    webhook_base_url = WEBHOOK_URL or (
-        f"https://{RAILWAY_PUBLIC_DOMAIN}" if RAILWAY_PUBLIC_DOMAIN else None
+    webhook_base_url = (
+        WEBHOOK_URL
+        or RAILWAY_STATIC_URL
+        or (f"https://{RAILWAY_PUBLIC_DOMAIN}" if RAILWAY_PUBLIC_DOMAIN else None)
     )
+
+    if ON_RAILWAY and not webhook_base_url:
+        raise RuntimeError(
+            "Running on Railway without webhook configuration. "
+            "Set WEBHOOK_URL (recommended) or enable a public domain."
+        )
 
     if webhook_base_url:
         webhook_path = WEBHOOK_PATH.strip("/") or "telegram"
