@@ -1,13 +1,14 @@
-import os
 import csv
+import os
 from datetime import datetime
+
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
-    MessageHandler,
-    ConversationHandler,
     ContextTypes,
+    ConversationHandler,
+    MessageHandler,
     filters,
 )
 
@@ -18,108 +19,103 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 # Conversation states
 NAME, STUDENT_ID, CERTIFICATE = range(3)
 
-# Create folder for certificates
-os.makedirs("certificates", exist_ok=True)
-
+# Storage setup
+CERTIFICATES_DIR = "certificates"
 CSV_FILE = "submissions.csv"
+os.makedirs(CERTIFICATES_DIR, exist_ok=True)
 
-# Create CSV file if it doesn't exist
+# Create CSV header if needed
 if not os.path.exists(CSV_FILE):
-    with open(CSV_FILE, "w", newline="") as f:
+    with open(CSV_FILE, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["Name", "StudentID", "Username", "Time", "File"])
 
 
-# Start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start submission flow."""
     await update.message.reply_text("Welcome!\n\nPlease enter your Full Name:")
     return NAME
 
 
-# Get name
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["name"] = update.message.text
+    """Store student's full name and ask for student ID."""
+    context.user_data["name"] = update.message.text.strip()
     await update.message.reply_text("Please enter your Student ID:")
     return STUDENT_ID
 
 
-# Get student ID
 async def get_student_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["student_id"] = update.message.text
+    """Store student ID and ask for certificate file."""
+    context.user_data["student_id"] = update.message.text.strip()
     await update.message.reply_text("Now send your certificate (PDF, image, or document).")
     return CERTIFICATE
 
 
-# Receive certificate
 async def receive_certificate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Accept certificate file, store it, and log submission to CSV."""
+    message = update.message
+    user = message.from_user
 
-    user = update.message.from_user
-    name = context.user_data["name"]
-    student_id = context.user_data["student_id"]
+    name = context.user_data.get("name")
+    student_id = context.user_data.get("student_id")
 
-    file = None
+    if not name or not student_id:
+        await message.reply_text("Session expired. Please send /start again.")
+        return ConversationHandler.END
+
+    tg_file = None
     filename = ""
 
-    if update.message.document:
-        file = await update.message.document.get_file()
-        filename = update.message.document.file_name
-
-    elif update.message.photo:
-        file = await update.message.photo[-1].get_file()
+    if message.document:
+        tg_file = await message.document.get_file()
+        filename = message.document.file_name or f"{student_id}.bin"
+    elif message.photo:
+        tg_file = await message.photo[-1].get_file()
         filename = f"{student_id}.jpg"
-
     else:
-        await update.message.reply_text("Please send a valid certificate file.")
+        await message.reply_text("Please send a valid certificate file.")
         return CERTIFICATE
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filepath = f"certificates/{student_id}_{timestamp}_{filename}"
+    filepath = f"{CERTIFICATES_DIR}/{student_id}_{timestamp}_{filename}"
+    await tg_file.download_to_drive(filepath)
 
-    await file.download_to_drive(filepath)
-
-    time_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    with open(CSV_FILE, "a", newline="") as f:
+    submitted_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open(CSV_FILE, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow([
             name,
             student_id,
-            user.username,
-            time_now,
-            filepath
+            user.username or "",
+            submitted_at,
+            filepath,
         ])
 
-    await update.message.reply_text("✅ Certificate submitted successfully!")
-
+    await message.reply_text("✅ Certificate submitted successfully!")
     return ConversationHandler.END
 
 
-# Admin command to download submissions
 async def submissions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
+    """Admin-only command to download submissions CSV."""
     if update.message.from_user.id != ADMIN_ID:
         await update.message.reply_text("Unauthorized")
         return
 
-    await update.message.reply_document(open(CSV_FILE, "rb"))
+    with open(CSV_FILE, "rb") as f:
+        await update.message.reply_document(f)
 
 
-# Cancel command
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel current submission flow."""
     await update.message.reply_text("Submission cancelled.")
     return ConversationHandler.END
 
 
-# Main function
 def main():
+    if not TOKEN:
+        raise RuntimeError("BOT_TOKEN is not set")
 
-    app = (
-        ApplicationBuilder()
-        .token(TOKEN)
-        .connect_timeout(30)
-        .read_timeout(30)
-        .build()
-    )
+    app = ApplicationBuilder().token(TOKEN).build()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
@@ -131,13 +127,13 @@ def main():
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
+        allow_reentry=True,
     )
 
     app.add_handler(conv_handler)
     app.add_handler(CommandHandler("submissions", submissions))
 
     print("Bot running...")
-
     app.run_polling(drop_pending_updates=True)
 
 
