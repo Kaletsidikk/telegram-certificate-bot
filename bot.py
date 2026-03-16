@@ -14,7 +14,7 @@ from telegram.ext import (
 TOKEN = os.environ.get("BOT_TOKEN")
 
 # CHANGE THIS TO YOUR TELEGRAM USER ID
-ADMIN_ID = 123456789
+ADMIN_ID = 1349142732
 
 # DEADLINE (YYYY-MM-DD HH:MM)
 DEADLINE = datetime(2026, 3, 20, 23, 59)
