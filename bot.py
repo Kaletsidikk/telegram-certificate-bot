@@ -11,11 +11,14 @@ from telegram.ext import (
     filters,
 )
 
+# Environment variables
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
+# Conversation states
 NAME, STUDENT_ID, CERTIFICATE = range(3)
 
+# Create folder for certificates
 os.makedirs("certificates", exist_ok=True)
 
 CSV_FILE = "submissions.csv"
@@ -27,30 +30,27 @@ if not os.path.exists(CSV_FILE):
         writer.writerow(["Name", "StudentID", "Username", "Time", "File"])
 
 
-# START
+# Start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("User started bot")
-    await update.message.reply_text("Welcome! Please enter your Full Name:")
+    await update.message.reply_text("Welcome!\n\nPlease enter your Full Name:")
     return NAME
 
 
-# GET NAME
+# Get name
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["name"] = update.message.text
-    await update.message.reply_text("Enter your Student ID:")
+    await update.message.reply_text("Please enter your Student ID:")
     return STUDENT_ID
 
 
-# GET STUDENT ID
+# Get student ID
 async def get_student_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["student_id"] = update.message.text
-    await update.message.reply_text(
-        "Now send your certificate (PDF, image, or document)."
-    )
+    await update.message.reply_text("Now send your certificate (PDF, image, or document).")
     return CERTIFICATE
 
 
-# RECEIVE FILE
+# Receive certificate
 async def receive_certificate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.message.from_user
@@ -69,7 +69,7 @@ async def receive_certificate(update: Update, context: ContextTypes.DEFAULT_TYPE
         filename = f"{student_id}.jpg"
 
     else:
-        await update.message.reply_text("Please send a valid file.")
+        await update.message.reply_text("Please send a valid certificate file.")
         return CERTIFICATE
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -86,7 +86,7 @@ async def receive_certificate(update: Update, context: ContextTypes.DEFAULT_TYPE
             student_id,
             user.username,
             time_now,
-            filepath,
+            filepath
         ])
 
     await update.message.reply_text("✅ Certificate submitted successfully!")
@@ -94,7 +94,7 @@ async def receive_certificate(update: Update, context: ContextTypes.DEFAULT_TYPE
     return ConversationHandler.END
 
 
-# ADMIN COMMAND
+# Admin command to download submissions
 async def submissions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if update.message.from_user.id != ADMIN_ID:
@@ -104,13 +104,13 @@ async def submissions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_document(open(CSV_FILE, "rb"))
 
 
-# CANCEL
+# Cancel command
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Cancelled.")
+    await update.message.reply_text("Submission cancelled.")
     return ConversationHandler.END
 
 
-# MAIN
+# Main function
 def main():
 
     app = (
@@ -138,27 +138,7 @@ def main():
 
     print("Bot running...")
 
-    app.run_polling(dropimport os
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-
-TOKEN = os.getenv("BOT_TOKEN")
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("Start command received")
-    await update.message.reply_text("Bot is working!")
-
-def main():
-    app = ApplicationBuilder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-
-    print("Bot running...")
-
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()_pending_updates=True)
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
