@@ -1,5 +1,6 @@
 import os
 import csv
+import zipfile
 from datetime import datetime
 from telegram import Update
 from telegram.ext import (
@@ -13,15 +14,17 @@ from telegram.ext import (
 
 TOKEN = os.environ.get("BOT_TOKEN")
 
-ADMIN_ID = 1349142732   
+# PUT YOUR TELEGRAM ID HERE
+ADMIN_ID = 1349142732
 
 NAME, STUDENT_ID, CERTIFICATE = range(3)
 
+# create folders
 os.makedirs("certificates", exist_ok=True)
 
 CSV_FILE = "submissions.csv"
 
-# create csv file
+# create csv if not exists
 if not os.path.exists(CSV_FILE):
     with open(CSV_FILE, "w", newline="") as f:
         writer = csv.writer(f)
@@ -29,11 +32,13 @@ if not os.path.exists(CSV_FILE):
 
 
 def already_submitted(student_id):
+
     with open(CSV_FILE, "r") as f:
         reader = csv.reader(f)
         for row in reader:
             if len(row) > 1 and row[1] == student_id:
                 return True
+
     return False
 
 
@@ -81,41 +86,40 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = context.user_data["name"]
     student_id = context.user_data["id"]
 
-    file_path = None
     filename = None
 
-    # DOCUMENT (PDF etc)
     if update.message.document:
 
         doc = update.message.document
         file = await doc.get_file()
 
         filename = f"{student_id}_{doc.file_name}"
-        file_path = f"certificates/{filename}"
 
-        await file.download_to_drive(file_path)
+        await file.download_to_drive(f"certificates/{filename}")
 
-    # PHOTO
     elif update.message.photo:
 
         photo = update.message.photo[-1]
         file = await photo.get_file()
 
         filename = f"{student_id}_certificate.jpg"
-        file_path = f"certificates/{filename}"
 
-        await file.download_to_drive(file_path)
+        await file.download_to_drive(f"certificates/{filename}")
 
     else:
+
         await update.message.reply_text(
-            "Please upload a certificate file (PDF or Image)."
+            "Please upload a certificate file."
         )
+
         return CERTIFICATE
 
     submit_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     with open(CSV_FILE, "a", newline="") as f:
+
         writer = csv.writer(f)
+
         writer.writerow([name, student_id, filename, submit_time])
 
     await update.message.reply_text(
@@ -135,15 +139,65 @@ async def submissions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def files(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    files = os.listdir("certificates")
+
+    if not files:
+
+        await update.message.reply_text(
+            "No certificates submitted yet."
+        )
+
+        return
+
+    for f in files:
+
+        await update.message.reply_document(
+            document=open(f"certificates/{f}", "rb")
+        )
+
+
+async def download_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    zip_name = "certificates.zip"
+
+    with zipfile.ZipFile(zip_name, "w") as zipf:
+
+        for root, dirs, files in os.walk("certificates"):
+
+            for file in files:
+
+                zipf.write(
+                    os.path.join(root, file),
+                    file
+                )
+
+    await update.message.reply_document(
+        document=open(zip_name, "rb")
+    )
+
+
 def main():
 
     app = ApplicationBuilder().token(TOKEN).build()
 
     conv = ConversationHandler(
+
         entry_points=[CommandHandler("start", start)],
+
         states={
+
             NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
+
             STUDENT_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_id)],
+
             CERTIFICATE: [
                 MessageHandler(
                     filters.Document.ALL | filters.PHOTO,
@@ -151,12 +205,17 @@ def main():
                 )
             ],
         },
+
         fallbacks=[],
     )
 
     app.add_handler(conv)
 
     app.add_handler(CommandHandler("submissions", submissions))
+
+    app.add_handler(CommandHandler("files", files))
+
+    app.add_handler(CommandHandler("download_all", download_all))
 
     print("Bot running...")
 
