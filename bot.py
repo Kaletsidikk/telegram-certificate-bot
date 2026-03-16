@@ -1,5 +1,6 @@
 import os
 import csv
+import logging
 from datetime import datetime
 from telegram import Update
 from telegram.ext import (
@@ -14,16 +15,26 @@ from telegram.ext import (
 # Environment variables
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+RAILWAY_PUBLIC_DOMAIN = os.getenv("RAILWAY_PUBLIC_DOMAIN")
+PORT = int(os.getenv("PORT", "8080"))
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+
+logger = logging.getLogger(__name__)
 
 # Conversation states
 NAME, STUDENT_ID, CERTIFICATE = range(3)
 
-# Create folder for certificates
+# Create certificates folder
 os.makedirs("certificates", exist_ok=True)
 
 CSV_FILE = "submissions.csv"
 
-# Create CSV file if it doesn't exist
+# Create CSV file if it does not exist
 if not os.path.exists(CSV_FILE):
     with open(CSV_FILE, "w", newline="") as f:
         writer = csv.writer(f)
@@ -32,7 +43,9 @@ if not os.path.exists(CSV_FILE):
 
 # Start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Welcome!\n\nPlease enter your Full Name:")
+    await update.message.reply_text(
+        "Welcome!\n\nPlease enter your Full Name:"
+    )
     return NAME
 
 
@@ -46,7 +59,9 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Get student ID
 async def get_student_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["student_id"] = update.message.text
-    await update.message.reply_text("Now send your certificate (PDF, image, or document).")
+    await update.message.reply_text(
+        "Please upload your Certificate (PDF, Image, or Document):"
+    )
     return CERTIFICATE
 
 
@@ -54,40 +69,39 @@ async def get_student_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receive_certificate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.message.from_user
-    name = context.user_data["name"]
-    student_id = context.user_data["student_id"]
+    name = context.user_data.get("name")
+    student_id = context.user_data.get("student_id")
+    username = user.username or "N/A"
 
     file = None
-    filename = ""
 
     if update.message.document:
-        file = await update.message.document.get_file()
-        filename = update.message.document.file_name
-
+        file = update.message.document
     elif update.message.photo:
-        file = await update.message.photo[-1].get_file()
-        filename = f"{student_id}.jpg"
+        file = update.message.photo[-1]
 
-    else:
-        await update.message.reply_text("Please send a valid certificate file.")
+    if file is None:
+        await update.message.reply_text("Please upload a valid certificate file.")
         return CERTIFICATE
 
+    file_obj = await file.get_file()
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filepath = f"certificates/{student_id}_{timestamp}_{filename}"
+    filename = f"{student_id}_{timestamp}"
 
-    await file.download_to_drive(filepath)
+    if update.message.document:
+        filename += f"_{file.file_name}"
+    else:
+        filename += ".jpg"
 
-    time_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    filepath = os.path.join("certificates", filename)
 
+    await file_obj.download_to_drive(filepath)
+
+    # Save to CSV
     with open(CSV_FILE, "a", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow([
-            name,
-            student_id,
-            user.username,
-            time_now,
-            filepath
-        ])
+        writer.writerow([name, student_id, username, timestamp, filename])
 
     await update.message.reply_text("✅ Certificate submitted successfully!")
 
@@ -110,8 +124,10 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-# Main function
 def main():
+
+    if not TOKEN:
+        raise RuntimeError("BOT_TOKEN is not set")
 
     app = (
         ApplicationBuilder()
@@ -136,9 +152,27 @@ def main():
     app.add_handler(conv_handler)
     app.add_handler(CommandHandler("submissions", submissions))
 
-    print("Bot running...")
+    webhook_base_url = WEBHOOK_URL or (
+        f"https://{RAILWAY_PUBLIC_DOMAIN}" if RAILWAY_PUBLIC_DOMAIN else None
+    )
 
-    app.run_polling(drop_pending_updates=True)
+    if webhook_base_url:
+        webhook_path = TOKEN
+        webhook_url = f"{webhook_base_url.rstrip('/')}/{webhook_path}"
+
+        logger.info("Bot running in webhook mode on port %s", PORT)
+        logger.info("Webhook URL: %s", webhook_url)
+
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=webhook_path,
+            webhook_url=webhook_url,
+            drop_pending_updates=True,
+        )
+    else:
+        logger.info("Bot running in polling mode")
+        app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
