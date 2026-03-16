@@ -1,8 +1,10 @@
 import csv
+import logging
 import os
 from datetime import datetime
 
 from telegram import Update
+from telegram.error import Conflict
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -17,6 +19,11 @@ TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 CSV_FILE = "submissions.csv"
 os.makedirs("certificates", exist_ok=True)
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 # Conversation states
 NAME, STUDENT_ID, CERTIFICATE = range(3)
@@ -98,6 +105,17 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    if isinstance(context.error, Conflict):
+        logger.warning(
+            "Telegram polling conflict: another process is using this bot token. "
+            "Stop duplicate instances or switch to webhook mode in production."
+        )
+        return
+
+    logger.exception("Unhandled bot error", exc_info=context.error)
+
+
 def main():
     if not TOKEN:
         raise RuntimeError("BOT_TOKEN is not set")
@@ -117,8 +135,9 @@ def main():
 
     app.add_handler(conv_handler)
     app.add_handler(CommandHandler("submissions", submissions))
+    app.add_error_handler(error_handler)
 
-    print("Bot running (polling mode)...")
+    logger.info("Bot running (polling mode)...")
     app.run_polling(drop_pending_updates=True)
 
 
